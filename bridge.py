@@ -1948,16 +1948,17 @@ class WorldToMeshPipeline:
 
         proc = None  # FIX #2: Guardamos referência para matar no Ctrl+C
         try:
+            import sys
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.h3d_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=sys.stdout,
+                stderr=sys.stderr,
                 text=True,
             )
 
             try:
-                stdout, stderr = proc.communicate(timeout=900)  # 15 min timeout
+                proc.wait(timeout=900)  # 15 min timeout
             except subprocess.TimeoutExpired:
                 self.logger.error("   ❌ Timeout (>15min) – matando processo Hunyuan3D")
                 proc.terminate()
@@ -1972,7 +1973,7 @@ class WorldToMeshPipeline:
                 raise
 
             if proc.returncode != 0:
-                self.logger.error(f"   Stderr: {stderr[-500:]}")
+                self.logger.error(f"   ❌ Erro na execução do Hunyuan3D (código {proc.returncode})")
                 return False
 
             if Path(output_path).exists():
