@@ -61,6 +61,12 @@ pip install ninja pyvista trimesh open3d pymeshlab basicsr timm transformers sci
 echo "[3.6/6] 🏗️ Compilando e instalando pacote Hunyuan3D-2 (hy3dgen)..."
 cd Hunyuan3D-2-main
 python3 -m pip install --no-build-isolation -e .
+
+# Compilar explicitamente o custom_rasterizer da Textura (Garante que a pintura AAA funcione)
+echo "[3.7/6] 🎨 Compilando Custom Rasterizer (Obrigatório para texturas)..."
+cd hy3dgen/texgen/custom_rasterizer
+python3 setup.py install || echo "Aviso: custom_rasterizer falhou. As texturas 3D podem ficar brancas."
+
 cd ~/aiworldmachinev13
 
 # 4. Compilar o MonsterCore V2 (C++/CUDA)
