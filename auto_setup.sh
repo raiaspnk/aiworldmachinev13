@@ -23,8 +23,8 @@ cd "$WORKSPACE_DIR"
 
 if [ ! -d "Real-ESRGAN" ]; then git clone https://github.com/xinntao/Real-ESRGAN.git; fi
 if [ ! -d "Hunyuan3D-2-main" ]; then
-    git clone https://github.com/Tencent-Hunyuan/Hunyuan3D-2.1.git
-    mv Hunyuan3D-2.1 Hunyuan3D-2-main
+    git clone https://github.com/Tencent/Hunyuan3D-2.git
+    mv Hunyuan3D-2 Hunyuan3D-2-main
 fi
 if [ ! -d "StableNormal" ]; then git clone https://github.com/Stable-X/StableNormal.git; fi
 if [ ! -d "HunyuanWorld-Mirror-main" ]; then
@@ -59,12 +59,7 @@ pip install ninja pyvista trimesh open3d pymeshlab basicsr timm transformers sci
 
 # 3.6 Instalar Hunyuan3D-2 como pacote Python (obrigatório para hy3dgen)
 echo "[3.6/6] 🏗️ Compilando e instalando pacote Hunyuan3D-2 (hy3dgen)..."
-# Tenta entrar na pasta certa dependendo se foi clonado (pasta dupla) ou descompactado direto
-if [ -d "Hunyuan3D-2-main/Hunyuan3D-2-main" ]; then
-    cd Hunyuan3D-2-main/Hunyuan3D-2-main
-else
-    cd Hunyuan3D-2-main
-fi
+cd Hunyuan3D-2-main
 python3 -m pip install --no-build-isolation -e .
 cd ~/aiworldmachinev13
 
