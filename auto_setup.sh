@@ -59,9 +59,14 @@ pip install ninja pyvista trimesh open3d pymeshlab basicsr timm transformers sci
 
 # 3.6 Instalar Hunyuan3D-2 como pacote Python (obrigatório para hy3dgen)
 echo "[3.6/6] 🏗️ Compilando e instalando pacote Hunyuan3D-2 (hy3dgen)..."
-cd Hunyuan3D-2-main
+# Tenta entrar na pasta certa dependendo se foi clonado (pasta dupla) ou descompactado direto
+if [ -d "Hunyuan3D-2-main/Hunyuan3D-2-main" ]; then
+    cd Hunyuan3D-2-main/Hunyuan3D-2-main
+else
+    cd Hunyuan3D-2-main
+fi
 python3 -m pip install --no-build-isolation -e .
-cd ..
+cd ~/aiworldmachinev13
 
 # 4. Compilar o MonsterCore V2 (C++/CUDA)
 echo "[4/6] ⚙️ Compilando MonsterCore V2 (A Magia C++/CUDA)..."
