@@ -1948,7 +1948,6 @@ class WorldToMeshPipeline:
 
         proc = None  # FIX #2: Guardamos referência para matar no Ctrl+C
         try:
-            import sys
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(self.h3d_dir),
