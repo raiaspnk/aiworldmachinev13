@@ -93,7 +93,7 @@ snapshot_download('tencent/Hunyuan3D-2', local_dir=f'{wk_dir}/weights/Hunyuan3D-
 
 # 6. Finalização e Teste do Motor
 echo "[6/6] 🏁 Testando Ignição do MonsterCore..."
-if python3 -c "import monster_core; monster_core.init_pool(8192); print('\n✅ MONSTERCORE DETECTADO NA PLACA DE VÍDEO!');" 2>/dev/null; then
+if python3 -c "import torch; import monster_core; monster_core.init_pool(8192); print('\n✅ MONSTERCORE DETECTADO NA PLACA DE VÍDEO!');" 2>/dev/null; then
     echo "==================================================================="
     echo "🏎️  AI WORLD ENGINE (V13) ESTÁ PRONTA!"
     echo "   Sua bateria de RTX 4090 está armada."
