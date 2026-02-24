@@ -1,0 +1,33 @@
+# Extra dependencies for full AI model integration
+# Install with: pip install -r requirements-extra.txt
+
+# Real-ESRGAN (4x upscaling)
+realesrgan
+basicsr>=1.4.2
+opencv-python>=4.5.0
+
+# Depth Anything 3 (metric depth refinement)
+depth-anything-3
+timm>=0.9.0
+torch>=2.0
+xformers
+
+# SAM 3 (semantic segmentation + open-vocabulary concepts)
+sam3
+huggingface-hub>=0.19.0  # Para download automático de checkpoints
+
+# StableNormal-turbo (High-quality normal maps - 10x faster)
+# Carregado via torch.hub, sem pip install necessário
+# torch>=2.0 já está nas dependências principais
+
+
+# Hunyuan3D-Part (P3-SAM + X-Part modular mesh segmentation)
+transformers>=4.30.0
+trust-remote-code
+
+# xAtlas (Professional UV Packing – CPU-based, zero VRAM impact)
+# Resolve o problema de "texel density caótico" gerado por IAs
+xatlas
+
+# scipy (Texture Baking KDTree – transfere texturas para mesh retopologizado)
+scipy
