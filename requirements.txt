@@ -1,0 +1,64 @@
+# ==========================================================================
+#  WORLD-TO-MESH UNIVERSAL - Master Requirements
+#  Consolida dependências para HunyuanWorld-Mirror e Hunyuan3D-2
+# ==========================================================================
+
+# --- Core ML & Deep Learning ---
+torch
+torchvision
+torchaudio
+lightning>=2.5.0
+accelerate
+diffusers
+transformers
+einops
+huggingface-hub[torch]>=0.22
+omegaconf
+hydra-core
+tensorboardX
+rootutils
+h5py
+torchmetrics
+jaxtyping
+
+# --- Math & geometry ---
+numpy<2.0.0
+scipy
+roma
+lpips
+colorspacious
+pycolmap==3.10.0
+trimesh
+open3d==0.18.0
+plyfile
+
+# --- 3D Mesh Processing ---
+ninja
+pybind11
+pymeshlab
+pygltflib
+xatlas
+
+# --- Image & Video Processing ---
+opencv-python
+pillow
+pillow_heif
+moviepy==1.0.3
+matplotlib
+rembg
+onnxruntime-gpu
+
+# --- UI & API ---
+gradio
+fastapi
+uvicorn
+viser
+tyro
+rich==13.3.5
+tqdm
+
+# --- Dev & Utils ---
+pre-commit
+pytest
+pathlib
+shutil
