@@ -1441,6 +1441,7 @@ class WorldToMeshPipeline:
         target_faces: int = 60000,
         use_mesh_smoothing: bool = True,
         smoothing_iterations: int = 5,
+        octree_resolution: Optional[int] = None,
         use_retopo: bool = False,
         use_uv_pack: bool = False,
         use_tiling: bool = False,          # NOVO: World Tiling para mundos 2km+
@@ -1659,6 +1660,7 @@ class WorldToMeshPipeline:
                     scene_mode=True,
                     enable_texture=enable_texture,
                     seed=seed,
+                    octree_resolution=octree_resolution,
                     normal_map_path=normal_map_path,
                     depth_map_path=depth_map_path,
                 )
@@ -1670,6 +1672,7 @@ class WorldToMeshPipeline:
                 scene_mode=True,
                 enable_texture=enable_texture,
                 seed=seed,
+                octree_resolution=octree_resolution,
                 normal_map_path=normal_map_path,
                 depth_map_path=depth_map_path,
             )
@@ -1929,6 +1932,7 @@ class WorldToMeshPipeline:
         scene_mode: bool = True,
         enable_texture: bool = True,
         seed: int = 42,
+        octree_resolution: Optional[int] = None,
         normal_map_path: Optional[str] = None,  # FIX #3: Integration gap
         depth_map_path: Optional[str] = None,   # FIX #3: Integration gap
     ) -> bool:
@@ -1955,6 +1959,9 @@ class WorldToMeshPipeline:
             "--output", output_path,
             "--seed", str(seed),
         ]
+        
+        if octree_resolution:
+            cmd.extend(["--octree_resolution", str(octree_resolution)])
 
         if scene_mode:
             cmd.append("--scene_mode")
@@ -2190,6 +2197,10 @@ def main():
         help="Número de iterações de smoothing (padrão: 30 - Motor V2 roda na velocidade da luz)",
     )
     parser.add_argument(
+        "--octree-resolution", type=int, default=None,
+        help="Resolução da octree (128, 256, 384, 512). Maior = mais detalhes geométricos.",
+    )
+    parser.add_argument(
         "--cleanup-ttl", type=float, default=1.0,
         help="TTL em horas para limpeza automática (padrão: 1.0)",
     )
@@ -2290,6 +2301,7 @@ def main():
             target_faces=args.target_faces,
             use_mesh_smoothing=args.use_mesh_smoothing,
             smoothing_iterations=args.smoothing_iterations,
+            octree_resolution=args.octree_resolution,
             use_retopo=args.use_retopo,
             use_uv_pack=args.use_uv_pack,
             use_tiling=args.use_tiling,
