@@ -51,7 +51,7 @@ STYLE_PRESETS: dict = {
             "high-poly",
         ],
         "params": {
-            "target_size": 512,
+            "target_size": 518,  # Múltiplo de 14 obrigatório (37 * 14 = 518)
             "edge_normal_threshold": 8.0,   # Arestas bem pronunciadas
             "edge_depth_threshold": 0.05,
             "confidence_percentile": 12.0,
@@ -105,7 +105,7 @@ STYLE_PRESETS: dict = {
             "pixelated",
         ],
         "params": {
-            "target_size": 768,
+            "target_size": 770,  # Múltiplo de 14 obrigatório (55 * 14 = 770)
             "edge_normal_threshold": 3.0,   # Mais fino para detalhes
             "edge_depth_threshold": 0.02,
             "confidence_percentile": 5.0,   # Mais rigoroso
@@ -132,7 +132,7 @@ STYLE_PRESETS: dict = {
             "complex textures",
         ],
         "params": {
-            "target_size": 512,
+            "target_size": 518,  # Múltiplo de 14 obrigatório (37 * 14 = 518)
             "edge_normal_threshold": 2.0,   # Arestas super definidas
             "edge_depth_threshold": 0.02,
             "confidence_percentile": 10.0,
