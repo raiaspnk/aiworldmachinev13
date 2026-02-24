@@ -33,6 +33,11 @@ import sys
 import time
 from pathlib import Path
 
+# Adiciona o diretório atual ao PYTHONPATH para encontrar o pacote hy3dgen
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 logger = logging.getLogger("world_to_mesh.scene_mesh")
 
 
