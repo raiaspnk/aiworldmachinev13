@@ -1528,26 +1528,23 @@ class WorldToMeshPipeline:
 
         result["prompt_enhanced"] = enhanced_prompt
 
-        # ── 3. Executar HunyuanWorld ─────────────────────────────
+        # ── 3. Executar Text-To-Image (SDXL / Flux) ─────────────────────────
         master_frame_path = session_dir / "world_image.png"
 
         for attempt in range(1, max_retries + 1):
-            self.logger.info(f"\n🌍 Etapa 1/2: HunyuanWorld (tentativa {attempt}/{max_retries})")
+            self.logger.info(f"\n🌍 Etapa 1/2: Geração de Imagem (tentativa {attempt}/{max_retries})")
             start_world = time.time()
 
-            world_success = self._run_hunyuan_world(
-                enhanced_prompt=enhanced_prompt,
-                style=style,
-                style_params=style_params,
-                output_dir=str(session_dir / "world_output"),
-                master_frame_path=str(master_frame_path),
+            world_success = self._run_text_to_image(
+                prompt=enhanced_prompt,
+                output_path=str(master_frame_path),
                 seed=seed + attempt - 1,  # Seed diferente a cada tentativa
             )
 
             result["time_world_seconds"] = round(time.time() - start_world, 2)  # type: ignore
 
             if not world_success:
-                self.logger.warning(f"   ❌ HunyuanWorld falhou na tentativa {attempt}")
+                self.logger.warning(f"   ❌ Geração de imagem falhou na tentativa {attempt}")
                 if attempt < max_retries:
                     self.logger.info(f"   🔄 Tentando novamente com seed ajustado...")
                 continue
@@ -1835,94 +1832,61 @@ class WorldToMeshPipeline:
 
     # ── Etapas Internas ────────────────────────────────────────────────
 
-    def _run_hunyuan_world(
+    def _run_text_to_image(
         self,
-        enhanced_prompt: str,
-        style: str,
-        style_params: dict,
-        output_dir: str,
-        master_frame_path: str,
+        prompt: str,
+        output_path: str,
         seed: int = 42,
     ) -> bool:
         """
-        Executa o HunyuanWorld-Mirror para gerar visualização do mundo.
-
-        Usa subprocess para chamar o infer.py do HunyuanWorld.
-        Isso isola o processo e permite controlar timeouts.
-
-        Returns:
-            bool: True se o processo completou com sucesso
+        Gera o Frame Mestre inicial usando estabilidade (SDXL).
+        Substitui a antiga chamada cega ao infer.py que processava imagens de exemplo.
         """
-        infer_script = self.world_dir / "infer.py"
-
-        if not infer_script.exists():
-            self.logger.error(f"❌ Script não encontrado: {infer_script}")
-            return False
-
-        # Construir comando
-        cmd = [
-            sys.executable, str(infer_script),
-            "--output_path", output_dir,
-            "--text_prompt", enhanced_prompt,
-            "--style", style,
-            "--save_master_frame", master_frame_path,
-        ]
-
-        # Adicionar parâmetros de estilo
-        for param, value in style_params.items():
-            arg_name = f"--{param}"
-            cmd.extend([arg_name, str(value)])
-
-        self.logger.info(f"   Executando: {' '.join(cmd[:6])}...")
-
-        proc = None  # Guardamos a referência para poder matar se necessário
+        self.logger.info(f"   🎨 Gerando imagem mestre do mundo a partir do texto...")
+        
         try:
-            # FIX #2: Usar Popen em vez de subprocess.run
-            # subprocess.run não permite matar o processo filho se o pai morrer
-            # Popen armazena a referência, permitindo proc.terminate() no Ctrl+C
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(self.world_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
+            import torch
+            from diffusers import AutoPipelineForText2Image
 
-            try:
-                stdout, stderr = proc.communicate(timeout=600)  # 10 min timeout
-            except subprocess.TimeoutExpired:
-                self.logger.error("   ❌ Timeout (>10min) – matando processo HunyuanWorld")
-                proc.terminate()   # Sinal SIGTERM educado
-                proc.wait(timeout=10)  # Dá 10s para morrer
-                if proc.poll() is None:
-                    proc.kill()    # SIGKILL forçado se não morreu
-                return False
-            except KeyboardInterrupt:
-                self.logger.warning("   ⚠️ Ctrl+C recebido – matando HunyuanWorld...")
-                proc.terminate()
-                proc.wait(timeout=5)
-                raise  # Re-lança para o main() tratar
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            
+            self.logger.info("   ⏳ Carregando modelo Text-to-Image (SDXL)...")
+            pipe = AutoPipelineForText2Image.from_pretrained(
+                "stabilityai/stable-diffusion-xl-base-1.0",
+                torch_dtype=torch.float16,
+                use_safetensors=True
+            ).to(device)
 
-            if proc.returncode != 0:
-                self.logger.error(f"   Stderr: {stderr[-500:]}")
-                return False
+            generator = torch.Generator(device=device).manual_seed(seed)
+            raw_image = pipe(
+                prompt=prompt,
+                negative_prompt="blurry, low quality, deformed, disfigured, text, watermark, bad architecture, messy",
+                num_inference_steps=30,
+                guidance_scale=7.5,
+                generator=generator
+            ).images[0]
 
-            # Verificar se o frame mestre foi gerado
-            if Path(master_frame_path).exists():
-                self.logger.info(f"   ✅ Frame mestre gerado: {master_frame_path}")
-                return True
-            else:
-                self.logger.error("   ❌ Frame mestre não foi gerado")
-                return False
-
-        except KeyboardInterrupt:
-            if proc and proc.poll() is None:
-                proc.terminate()
-            raise
+            # Redimensionar para manter múltiplo de 14 para o Hunyuan3D-2
+            # 1022 / 14 = 73 (Perfeito)
+            img = raw_image.resize((1022, 1022))
+            img.save(output_path)
+            
+            self.logger.info(f"   ✅ Frame mestre gerado via Text-to-Image: {output_path}")
+            
+            # Flush VRAM (limpa os 6GB do SDXL)
+            del pipe
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                
+            return True
+            
+        except ImportError:
+            self.logger.error("   ❌ diffusers não instalado! Instale com: pip install diffusers")
+            return False
         except Exception as e:
-            if proc and proc.poll() is None:
-                proc.terminate()
-            self.logger.error(f"   ❌ Erro inesperado: {e}")
+            self.logger.error(f"   ❌ Falha na geração Text-to-Image: {e}", exc_info=True)
             return False
 
     def _run_hunyuan_3d(
