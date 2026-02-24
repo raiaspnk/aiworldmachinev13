@@ -1846,12 +1846,12 @@ class WorldToMeshPipeline:
         
         try:
             import torch
-            from diffusers import AutoPipelineForText2Image
+            from diffusers import StableDiffusionXLPipeline
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             
             self.logger.info("   ⏳ Carregando modelo Text-to-Image (SDXL)...")
-            pipe = AutoPipelineForText2Image.from_pretrained(
+            pipe = StableDiffusionXLPipeline.from_pretrained(
                 "stabilityai/stable-diffusion-xl-base-1.0",
                 torch_dtype=torch.float16,
                 use_safetensors=True
