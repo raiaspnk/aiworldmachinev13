@@ -48,8 +48,12 @@ from typing import Optional, Any
 # Em GPU alugada, estes caminhos podem ser diferentes.
 
 WORKSPACE_ROOT = Path(__file__).resolve().parent
-HUNYUAN_WORLD_DIR = WORKSPACE_ROOT / "HunyuanWorld-Mirror-main" / "HunyuanWorld-Mirror-main"
-HUNYUAN_3D_DIR = WORKSPACE_ROOT / "Hunyuan3D-2-main" / "Hunyuan3D-2-main"
+# Resolve Single vs Double Nested dirs (Git Clone vs ZIP Extraction)
+_hw_base = WORKSPACE_ROOT / "HunyuanWorld-Mirror-main"
+HUNYUAN_WORLD_DIR = _hw_base if (_hw_base / "infer.py").exists() else _hw_base / "HunyuanWorld-Mirror-main"
+
+_h3d_base = WORKSPACE_ROOT / "Hunyuan3D-2-main"
+HUNYUAN_3D_DIR = _h3d_base if (_h3d_base / "main.py").exists() else _h3d_base / "Hunyuan3D-2-main"
 
 # Diretório temporário para intercâmbio entre os pipelines
 # PULO DO GATO #1: Usar /tmp/ para não entupir storage da GPU alugada
@@ -189,6 +193,7 @@ class WorldToMeshPipeline:
     def _init_monster_core(self):
         """Inicializa o MonsterCore (C++/CUDA Engine) se disponível."""
         try:
+            import torch  # OBRIGATÓRIO antes do monster_core para carregar a libc10.so!
             import monster_core
             self._monster_core = monster_core
             # Pré-aloca arena de 8GB na VRAM (ajustável)
