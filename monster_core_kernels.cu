@@ -305,3 +305,97 @@ torch::Tensor launch_gpu_laplacian_smooth(
     
     return ((iterations % 2) == 1) ? v_out : v_in;
 }
+
+// ============================================================================
+// 3. TERRAIN GENERATION KERNEL (Depth Displacement)
+// ============================================================================
+
+__global__ void generate_displaced_vertices_kernel(
+    const float* __restrict__ depth_map,
+    float* __restrict__ vertices,
+    int res,
+    float max_height)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int max_idx = res * res;
+    if (idx < max_idx) {
+        int row = idx / res;
+        int col = idx % res;
+        
+        float x = (float)col / (res - 1) - 0.5f;
+        float y = (float)row / (res - 1) - 0.5f;
+        float z = depth_map[idx] * max_height;
+        
+        vertices[idx * 3 + 0] = x;
+        vertices[idx * 3 + 1] = y;
+        vertices[idx * 3 + 2] = z;
+    }
+}
+
+__global__ void generate_grid_faces_kernel(
+    int64_t* __restrict__ faces,
+    int res)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int max_idx = (res - 1) * (res - 1);
+    if (idx < max_idx) {
+        int row = idx / (res - 1);
+        int col = idx % (res - 1);
+        
+        int v00 = row * res + col;
+        int v10 = (row + 1) * res + col;
+        int v01 = row * res + (col + 1);
+        int v11 = (row + 1) * res + (col + 1);
+        
+        // Triangle 1: (v00, v10, v01)
+        faces[idx * 6 + 0] = v00;
+        faces[idx * 6 + 1] = v10;
+        faces[idx * 6 + 2] = v01;
+        
+        // Triangle 2: (v10, v11, v01)
+        faces[idx * 6 + 3] = v10;
+        faces[idx * 6 + 4] = v11;
+        faces[idx * 6 + 5] = v01;
+    }
+}
+
+std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
+    torch::Tensor depth_map,
+    float max_height)
+{
+    TORCH_CHECK(depth_map.is_cuda(), "Depth map must be a CUDA tensor.");
+    TORCH_CHECK(depth_map.dim() == 2, "Depth map must be 2D [H, W].");
+    TORCH_CHECK(depth_map.size(0) == depth_map.size(1), "Depth map must be square for grid generation.");
+    
+    int res = depth_map.size(0);
+    
+    auto opts_float = depth_map.options();
+    auto opts_long = depth_map.options().dtype(torch::kInt64);
+    
+    auto vertices = torch::empty({res * res, 3}, opts_float);
+    auto faces = torch::empty({(res - 1) * (res - 1) * 2, 3}, opts_long);
+    
+    int num_vertices = res * res;
+    int num_quads = (res - 1) * (res - 1);
+    
+    int threads_v = 256;
+    int blocks_v = (num_vertices + threads_v - 1) / threads_v;
+    generate_displaced_vertices_kernel<<<blocks_v, threads_v>>>(
+        depth_map.contiguous().data_ptr<float>(),
+        vertices.data_ptr<float>(),
+        res,
+        max_height
+    );
+    
+    int threads_f = 256;
+    int blocks_f = (num_quads + threads_f - 1) / threads_f;
+    generate_grid_faces_kernel<<<blocks_f, threads_f>>>(
+        faces.data_ptr<int64_t>(),
+        res
+    );
+    
+    // Sincroniza kernel para checar erros
+    cudaDeviceSynchronize();
+    
+    return {vertices, faces};
+}

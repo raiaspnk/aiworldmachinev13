@@ -304,6 +304,10 @@ py::dict async_geometry_pipeline(
 // PYBIND11 BINDINGS
 // ============================================================================
 
+std::vector<torch::Tensor> generate_displaced_grid(torch::Tensor depth_map, float max_height) {
+    return launch_gpu_generate_displaced_grid(depth_map, max_height);
+}
+
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.doc() = "MonsterCore – Zero-Copy C++/CUDA Engine para AI World Engine";
 
@@ -341,4 +345,9 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("tile_grid") = 2, py::arg("overlap_px") = 64,
           py::arg("ransac_threshold") = 0.02f, py::arg("ransac_iters") = 1000,
           py::arg("smooth_iters") = 5, py::arg("smooth_lambda") = 0.5f);
+          
+    // Terrain Generation / Displacement mapping
+    m.def("generate_displaced_grid", &generate_displaced_grid,
+          "Pure PTX Geometry Instancing for World Grid",
+          py::arg("depth_map"), py::arg("max_height") = 0.5f);
 }
