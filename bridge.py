@@ -1448,6 +1448,7 @@ class WorldToMeshPipeline:
         tile_grid: int = 2,                # Grid NxN (2=4tiles, 3=9tiles)
         quality_threshold: float = 70.0,
         use_part_segmentation: bool = False,
+        world_mode: bool = False,
     ) -> dict:
         """
         Pipeline ONE-SHOT PERFECTION: prompt textual → .glb + .obj AAA
@@ -1631,26 +1632,61 @@ class WorldToMeshPipeline:
             return result
 
 
-        # ── 5. Executar Hunyuan3D-2 ──────────────────────────────
+        # ── 5. Executar Reconstrução 3D (Hunyuan3D-2 ou Depth Displacement) ────────
         glb_path = Path(session_dir) / "world_mesh.glb"
 
-        self.logger.info(f"\n🔨 Etapa 2/2: Hunyuan3D-2 (reconstrução 3D)")
-        start_3d = time.time()
-
-        if use_tiling:
-            # FIX #4: World Tiling – subdivide em NxN tiles para mundos 2km+
-            tiled_path = self._generate_world_tiles(
-                image_path=str(master_frame_path),
-                session_dir=session_dir,
-                tile_grid=tile_grid,
-                enable_texture=enable_texture,
-                seed=seed,
-            )
-            if Path(tiled_path).exists() and tiled_path.endswith('.glb'):
-                glb_path = Path(tiled_path)
-                mesh_success = True
+        if world_mode:
+            self.logger.info(f"\n🔨 Etapa 2/2: World Generator (Mesh Displacement do Cenário)")
+            start_3d = time.time()
+            if not depth_map_path or not Path(depth_map_path).exists():
+                self.logger.error("   ❌ Erro: --world-mode exige --use-depth para gerar a topografia real. Ative a flag --use-depth.")
+                mesh_success = False
             else:
-                self.logger.warning("   ⚠️ Tiling falhou, tentando single-shot...")
+                try:
+                    import sys
+                    sys.path.append(str(Path(__file__).parent))
+                    from world_generator import generate_landscape_mesh
+                    mesh_success = generate_landscape_mesh(
+                        image_path=str(master_frame_path),
+                        depth_map_path=depth_map_path,
+                        output_path=str(glb_path),
+                        max_height=0.5,
+                        mesh_resolution=512,
+                        smoothing_iterations=smoothing_iterations if use_mesh_smoothing else 0
+                    )
+                except ImportError as e:
+                    self.logger.error(f"   ❌ Erro crítico ao carregar gerador de mundos: {e}")
+                    mesh_success = False
+        else:
+            self.logger.info(f"\n🔨 Etapa 2/2: Hunyuan3D-2 (reconstrução de objeto)")
+            start_3d = time.time()
+
+            if use_tiling:
+                # FIX #4: World Tiling – subdivide em NxN tiles para mundos 2km+
+                tiled_path = self._generate_world_tiles(
+                    image_path=str(master_frame_path),
+                    session_dir=session_dir,
+                    tile_grid=tile_grid,
+                    enable_texture=enable_texture,
+                    seed=seed,
+                )
+                if Path(tiled_path).exists() and tiled_path.endswith('.glb'):
+                    glb_path = Path(tiled_path)
+                    mesh_success = True
+                else:
+                    self.logger.warning("   ⚠️ Tiling falhou, tentando single-shot...")
+                    mesh_success = self._run_hunyuan_3d(
+                        image_path=str(master_frame_path),
+                        output_path=str(glb_path),
+                        scene_mode=True,
+                        enable_texture=enable_texture,
+                        seed=seed,
+                        octree_resolution=octree_resolution,
+                        normal_map_path=normal_map_path,
+                        depth_map_path=depth_map_path,
+                    )
+            else:
+                # Single-shot (padrão)
                 mesh_success = self._run_hunyuan_3d(
                     image_path=str(master_frame_path),
                     output_path=str(glb_path),
@@ -1661,18 +1697,6 @@ class WorldToMeshPipeline:
                     normal_map_path=normal_map_path,
                     depth_map_path=depth_map_path,
                 )
-        else:
-            # Single-shot (padrão)
-            mesh_success = self._run_hunyuan_3d(
-                image_path=str(master_frame_path),
-                output_path=str(glb_path),
-                scene_mode=True,
-                enable_texture=enable_texture,
-                seed=seed,
-                octree_resolution=octree_resolution,
-                normal_map_path=normal_map_path,
-                depth_map_path=depth_map_path,
-            )
 
         result["time_3d_seconds"] = round(time.time() - start_3d, 2)
 
@@ -2088,6 +2112,10 @@ def main():
 
     # Configurações avançadas
     parser.add_argument(
+        "--world-mode", action="store_true", default=False,
+        help="[NOVO] Gera mundos/cenários reais usando topografia de profundidade (evita gerar objetos quadrados). Exige --use-depth",
+    )
+    parser.add_argument(
         "--max-retries", type=int, default=3,
         help="Máx tentativas em caso de falha (padrão: 3)",
     )
@@ -2271,6 +2299,7 @@ def main():
             use_tiling=args.use_tiling,
             tile_grid=args.tile_grid,
             use_part_segmentation=args.use_part_segmentation,
+            world_mode=args.world_mode,
         )
 
         if result["success"]:
