@@ -53,7 +53,8 @@ _hw_base = WORKSPACE_ROOT / "HunyuanWorld-Mirror-main"
 HUNYUAN_WORLD_DIR = _hw_base if (_hw_base / "infer.py").exists() else _hw_base / "HunyuanWorld-Mirror-main"
 
 _h3d_base = WORKSPACE_ROOT / "Hunyuan3D-2-main"
-HUNYUAN_3D_DIR = _h3d_base if (_h3d_base / "main.py").exists() else _h3d_base / "Hunyuan3D-2-main"
+# Hunyuan3D-2.1 oficial não tem main.py no root, usamos gradio_app.py como probe
+HUNYUAN_3D_DIR = _h3d_base if (_h3d_base / "gradio_app.py").exists() else _h3d_base / "Hunyuan3D-2-main"
 
 # Diretório temporário para intercâmbio entre os pipelines
 # PULO DO GATO #1: Usar /tmp/ para não entupir storage da GPU alugada

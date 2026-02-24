@@ -34,9 +34,13 @@ fi
 
 # 2.5 Injetar scripts customizados (World-to-Mesh) no repositório original clonado
 if [ -d "custom_hw_scripts" ]; then
-    echo "[2.5/6] 🧩 Injetando scripts customizados (StyleManager, etc) no HunyuanWorld..."
+    echo "[2.5/6] 🧩 Injetando scripts customizados (StyleManager, SceneGen) nos motores..."
+    # HunyuanWorld
     cp custom_hw_scripts/infer.py HunyuanWorld-Mirror-main/infer.py
     cp -r custom_hw_scripts/src/* HunyuanWorld-Mirror-main/src/
+    
+    # Hunyuan3D-2
+    cp custom_hw_scripts/scene_mesh_generator.py Hunyuan3D-2-main/scene_mesh_generator.py
 fi
 
 if [ ! -d "sd-scripts" ]; then git clone https://github.com/kohya-ss/sd-scripts.git; fi
