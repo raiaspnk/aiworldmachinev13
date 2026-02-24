@@ -57,6 +57,12 @@ pip install -r requirements.txt || echo "requirements.txt pulado ou não encontr
 pip install -r requirements-extra.txt || echo "requirements-extra.txt pulado ou não encontrado"
 pip install ninja pyvista trimesh open3d pymeshlab basicsr timm transformers scipy xatlas huggingface_hub fastapi uvicorn
 
+# 3.6 Instalar Hunyuan3D-2 como pacote Python (obrigatório para hy3dgen)
+echo "[3.6/6] 🏗️ Compilando e instalando pacote Hunyuan3D-2 (hy3dgen)..."
+cd Hunyuan3D-2-main
+pip install -e .
+cd ..
+
 # 4. Compilar o MonsterCore V2 (C++/CUDA)
 echo "[4/6] ⚙️ Compilando MonsterCore V2 (A Magia C++/CUDA)..."
 if [ -f "setup.py" ] && [ -f "monster_core.cpp" ] && [ -f "monster_core_kernels.cu" ]; then
