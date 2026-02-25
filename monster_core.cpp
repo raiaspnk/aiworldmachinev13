@@ -304,8 +304,9 @@ py::dict async_geometry_pipeline(
 // PYBIND11 BINDINGS
 // ============================================================================
 
-std::vector<torch::Tensor> generate_displaced_grid(torch::Tensor depth_map, float max_height) {
-    return launch_gpu_generate_displaced_grid(depth_map, max_height);
+std::vector<torch::Tensor> generate_world_geometry_pipeline(
+    torch::Tensor depth_map, float max_height, float offset_x, float offset_y, float scale, int smooth_iters, float smooth_lambda) {
+    return launch_gpu_generate_world_geometry(depth_map, max_height, offset_x, offset_y, scale, smooth_iters, smooth_lambda);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -346,8 +347,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("ransac_threshold") = 0.02f, py::arg("ransac_iters") = 1000,
           py::arg("smooth_iters") = 5, py::arg("smooth_lambda") = 0.5f);
           
-    // Terrain Generation / Displacement mapping
-    m.def("generate_displaced_grid", &generate_displaced_grid,
-          "Pure PTX Geometry Instancing for World Grid. Returns [vertices, faces, normal_map, foliage_mask]",
-          py::arg("depth_map"), py::arg("max_height") = 0.5f);
+    // V3: Zero-Overhead Terrain Generation / Displacement mapping / Foliage / PBR Normals
+    m.def("generate_world_geometry_pipeline", &generate_world_geometry_pipeline,
+          "Zero-Overhead PTX Geometry Instancing for World Tiling. Returns [vertices, faces, normal_map, foliage_mask]",
+          py::arg("depth_map"), py::arg("max_height") = 0.5f,
+          py::arg("offset_x") = 0.0f, py::arg("offset_y") = 0.0f, py::arg("scale") = 1.0f,
+          py::arg("smooth_iters") = 3, py::arg("smooth_lambda") = 0.5f);
 }

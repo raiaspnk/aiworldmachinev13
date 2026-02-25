@@ -330,7 +330,10 @@ __global__ void generate_displaced_vertices_kernel(
     const float* __restrict__ depth_map,
     float* __restrict__ vertices,
     int res,
-    float max_height)
+    float max_height,
+    float offset_x,
+    float offset_y,
+    float scale)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int max_idx = res * res;
@@ -338,8 +341,9 @@ __global__ void generate_displaced_vertices_kernel(
         int row = idx / res;
         int col = idx % res;
         
-        float x = (float)col / (res - 1) - 0.5f;
-        float y = (float)row / (res - 1) - 0.5f;
+        // V3 Infinity Tiling: Local coordinates dynamically placed in World Space
+        float x = (((float)col / (res - 1)) - 0.5f) * scale + offset_x;
+        float y = (((float)row / (res - 1)) - 0.5f) * scale + offset_y;
         float z = depth_map[idx] * max_height;
         
         vertices[idx * 3 + 0] = x;
@@ -458,9 +462,14 @@ __global__ void generate_foliage_mask_kernel(
     }
 }
 
-std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
+std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
     torch::Tensor depth_map,
-    float max_height)
+    float max_height,
+    float offset_x,
+    float offset_y,
+    float scale,
+    int smooth_iters,
+    float smooth_lambda)
 {
     TORCH_CHECK(depth_map.is_cuda(), "Depth map must be a CUDA tensor.");
     TORCH_CHECK(depth_map.dim() == 2, "Depth map must be 2D [H, W].");
@@ -479,13 +488,19 @@ std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
     
     int threads_v = 256;
     int blocks_v = (num_vertices + threads_v - 1) / threads_v;
+    
+    // 1. Grid Displacement & World Placement
     generate_displaced_vertices_kernel<<<blocks_v, threads_v>>>(
         depth_map.contiguous().data_ptr<float>(),
         vertices.data_ptr<float>(),
         res,
-        max_height
+        max_height,
+        offset_x,
+        offset_y,
+        scale
     );
     
+    // 2. Face Generation
     int threads_f = 256;
     int blocks_f = (num_quads + threads_f - 1) / threads_f;
     generate_grid_faces_kernel<<<blocks_f, threads_f>>>(
@@ -511,9 +526,12 @@ std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
         res,
         0.95f
     );
-    
-    // Sincroniza kernel para checar erros
     cudaDeviceSynchronize();
+    
+    // 5. Zero-Overhead Laplacian Smoothing (Anti-Melting Phase)
+    if (smooth_iters > 0) {
+        vertices = launch_gpu_laplacian_smooth(vertices, faces, smooth_iters, smooth_lambda);
+    }
     
     return {vertices, faces, normals, foliage_mask};
 }

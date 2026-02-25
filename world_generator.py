@@ -10,7 +10,10 @@ def generate_landscape_mesh(
     output_path: str,
     max_height: float = 0.5,
     mesh_resolution: int = 1024,
-    smoothing_iterations: int = 3
+    smoothing_iterations: int = 3,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    scale: float = 1.0
 ) -> bool:
     """
     Gera uma malha 3D (.glb) de um cenário completo aplicando "Depth Displacement".
@@ -24,6 +27,9 @@ def generate_landscape_mesh(
         max_height: Altura máxima de extrusão (baseado no depth 255).
         mesh_resolution: Quantidade X e Y de polígonos da malha (ex: 512x512).
         smoothing_iterations: Iterações de Laplacian Smoothing para não ficar pontiagudo.
+        offset_x: Deslocamento no eixo X para Seamless Tiling de chunks adjacentes.
+        offset_y: Deslocamento no eixo Y para Seamless Tiling de chunks adjacentes.
+        scale: Escala física do World space (1.0 = bloco de 1x1 unidade).
     """
     print(f"🌍 [WorldGenerator] Iniciando extrusão de terreno ({mesh_resolution}x{mesh_resolution})...")
     
@@ -61,31 +67,29 @@ def generate_landscape_mesh(
         import sys
         
         try:
-            from monster_core import generate_displaced_grid
+            from monster_core import generate_world_geometry_pipeline
             use_cuda = torch.cuda.is_available()
         except ImportError:
-            print("⚠️ [WorldGenerator] Aviso: monster_core não encontado. Fallback para Numpy.")
+            print("⚠️ [WorldGenerator] Aviso: monster_core V3 não encontrado. Fallback para Numpy.")
             use_cuda = False
             
         if use_cuda:
             # 2.1 Enviar profundidade para VRAM
             depth_tensor = torch.from_numpy(img_depth_normalized).cuda()
             
-            # 2.2 Gerar matrizes de geometria na GPU via C++
-            # V2: NVidia Kernel calcula Vetores Normais
-            # V3: NVidia Kernel calcula Foliage Mask (Terrain slope)
-            vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_displaced_grid(depth_tensor, max_height)
+            # 2.2 Gerar ecossistema, geometria e aplicar Anti-Melting direto em C++ puro (Zero Python Overhead)
+            # V3: NVidia Kernel unifica Displacement, Normals, Foliage e Bilateral Smooth em 1 call.
+            vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_world_geometry_pipeline(
+                depth_map=depth_tensor, 
+                max_height=max_height,
+                offset_x=offset_x,
+                offset_y=offset_y,
+                scale=scale,
+                smooth_iters=smoothing_iterations,
+                smooth_lambda=0.5
+            )
             
-            # 2.3 [ANTI-MELTING] Suavização Bilateral GPU
-            # O kernel C++ executa o Laplacian com Threshold Bilateral (Ignora as paredes 90 graus, suaviza apenas o chão/terreno organicamente)
-            if smoothing_iterations > 0:
-                print(f"🌍 [WorldGenerator] Suavização Bilateral PTX ativa (Iterations: {smoothing_iterations})...")
-                # MonsterCore.laplacian_smooth_csr_kernel (Threshold hardcoded no .cu previne derretimento)
-                from monster_core import laplacian_smooth
-                # Suavizar apenas posições (vetores). Faces são re-passadas intactas.
-                vertices_tensor = laplacian_smooth(vertices_tensor, faces_tensor, iterations=smoothing_iterations, lambda_factor=0.5)
-            
-            # 2.4 Resgatar para RAM em C++ Pinned Memory
+            # 2.3 Resgatar para RAM em C++ Pinned Memory
             vertices = vertices_tensor.cpu().numpy()
             faces = faces_tensor.cpu().numpy()
             normals = normals_tensor.cpu().numpy() # [H, W, 3] Image format
@@ -176,9 +180,16 @@ def generate_landscape_mesh(
 # Para testes isolados
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--image", required=True)
-    parser.add_argument("--depth", required=True)
-    parser.add_argument("--output", required=True)
+    parser = argparse.ArgumentParser(description="AI World Engine - V3 Generator")
+    parser.add_argument("--image", required=True, help="Imagem RGB base (Texture)")
+    parser.add_argument("--depth", required=True, help="Mapa de Profundidade")
+    parser.add_argument("--output", required=True, help="Saída GLB")
+    parser.add_argument("--offset_x", type=float, default=0.0, help="World offset X para Tiling")
+    parser.add_argument("--offset_y", type=float, default=0.0, help="World offset Y para Tiling")
+    parser.add_argument("--scale", type=float, default=1.0, help="Tamanho físico do chunk")
     args = parser.parse_args()
-    generate_landscape_mesh(args.image, args.depth, args.output)
+    
+    generate_landscape_mesh(
+        args.image, args.depth, args.output,
+        offset_x=args.offset_x, offset_y=args.offset_y, scale=args.scale
+    )

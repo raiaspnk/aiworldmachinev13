@@ -22,8 +22,13 @@ torch::Tensor launch_gpu_laplacian_smooth(
     float lambda_factor
 );
 
-// Launches the GPU Terrain Generation kernel (Depth Displacement)
-std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
+// Launches the GPU Terrain Generation kernel (Depth Displacement) with Tiling Extents and Smoothing
+std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
     torch::Tensor depth_map,
-    float max_height
+    float max_height,
+    float offset_x,
+    float offset_y,
+    float scale,
+    int smooth_iters,
+    float smooth_lambda
 );
