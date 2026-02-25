@@ -9,7 +9,7 @@ def generate_landscape_mesh(
     depth_map_path: str,
     output_path: str,
     max_height: float = 0.5,
-    mesh_resolution: int = 512,
+    mesh_resolution: int = 1024,
     smoothing_iterations: int = 3
 ) -> bool:
     """
@@ -36,8 +36,13 @@ def generate_landscape_mesh(
         img_color = Image.open(image_path).convert("RGB")
         img_depth = cv2.imread(depth_map_path, cv2.IMREAD_GRAYSCALE)
         
-        # Redimensionar depth map para a resolução da malha para performance
-        img_depth_resized = cv2.resize(img_depth, (mesh_resolution, mesh_resolution), interpolation=cv2.INTER_LINEAR)
+        # [ANTI-MELTING] Aplicar filtro High-Pass (Sharpen) na profundidade
+        # Isso acentua as quinas dos prédios e "cliva" transições suaves entre parede e chão
+        kernel_sharpen = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        img_depth_hpass = cv2.filter2D(img_depth, -1, kernel_sharpen)
+        
+        # Redimensionar depth map para a nova alta resolução 1024x1024 (1M faces)
+        img_depth_resized = cv2.resize(img_depth_hpass, (mesh_resolution, mesh_resolution), interpolation=cv2.INTER_LINEAR)
         img_depth_normalized = img_depth_resized.astype(np.float32) / 255.0
         
         # Inverter o mapa se necessário (depende se o DepthAnything pretoo=longe ou branco=longe)
@@ -94,9 +99,11 @@ def generate_landscape_mesh(
         material = trimesh.visual.material.SimpleMaterial(image=img_color)
         mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, image=img_color, material=material)
         
-        # 4. Suavização para evitar espinhos pixelados (Laplacian Smoothing)
-        if smoothing_iterations > 0:
-            print(f"🌍 [WorldGenerator] Suavizando terreno ({smoothing_iterations} iterações)...")
+        # 4. Suavização (GPU Laplacian via MonsterCore já ocorre internamente pelo pipeline se invocado depois)
+        # O trimesh.smoothing faria tudo derreter, portanto removemos as iterações aqui para preservar o threshold Bilateral do PTX.
+        # Caso precise, isso deve ser roteado pelo async_geometry_pipeline que acabamos de alterar.
+        if smoothing_iterations > 0 and not use_cuda:
+            print(f"🌍 [WorldGenerator] (Fallback) Suavizando terreno via CPU...")
             trimesh.smoothing.filter_laplacian(mesh, iterations=smoothing_iterations)
             
         # 5. Exportar GLB

@@ -225,18 +225,34 @@ __global__ void laplacian_smooth_csr_kernel(
     float sum_x = 0.0f;
     float sum_y = 0.0f;
     float sum_z = 0.0f;
+    int valid_neighbors = 0;
+    
+    // Bilateral Threshold (Anti-Melting)
+    // Se a diferença do Z for maior que X (ex: 0.05), é uma quina de prédio/muro, não suavize com esse vizinho.
+    float bilateral_threshold = 0.02f; // Pode ser passado como parâmetro futuramente, fixado para cenários
     
     for (int i = 0; i < count; ++i) {
         int n_idx = neighbors[offset + i];
-        // Read through __ldg to utilize read-only data cache efficiently
-        sum_x += __ldg(&vertices_in[n_idx * 3 + 0]);
-        sum_y += __ldg(&vertices_in[n_idx * 3 + 1]);
-        sum_z += __ldg(&vertices_in[n_idx * 3 + 2]);
+        
+        float n_vz = __ldg(&vertices_in[n_idx * 3 + 2]);
+        if (fabsf(n_vz - vz) < bilateral_threshold) {
+            sum_x += __ldg(&vertices_in[n_idx * 3 + 0]);
+            sum_y += __ldg(&vertices_in[n_idx * 3 + 1]);
+            sum_z += n_vz;
+            valid_neighbors++;
+        }
     }
     
-    float mean_x = sum_x / (float)count;
-    float mean_y = sum_y / (float)count;
-    float mean_z = sum_z / (float)count;
+    if (valid_neighbors == 0) {
+        vertices_out[v_idx * 3 + 0] = vx;
+        vertices_out[v_idx * 3 + 1] = vy;
+        vertices_out[v_idx * 3 + 2] = vz;
+        return;
+    }
+    
+    float mean_x = sum_x / (float)valid_neighbors;
+    float mean_y = sum_y / (float)valid_neighbors;
+    float mean_z = sum_z / (float)valid_neighbors;
     
     vertices_out[v_idx * 3 + 0] = (1.0f - lambda_factor) * vx + lambda_factor * mean_x;
     vertices_out[v_idx * 3 + 1] = (1.0f - lambda_factor) * vy + lambda_factor * mean_y;
