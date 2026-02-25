@@ -72,8 +72,9 @@ def generate_landscape_mesh(
             depth_tensor = torch.from_numpy(img_depth_normalized).cuda()
             
             # 2.2 Gerar matrizes de geometria na GPU via C++
-            # V2: O NVidia Kernel agora calcula Vetores Normais em paralalelo
-            vertices_tensor, faces_tensor, normals_tensor = generate_displaced_grid(depth_tensor, max_height)
+            # V2: NVidia Kernel calcula Vetores Normais
+            # V3: NVidia Kernel calcula Foliage Mask (Terrain slope)
+            vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_displaced_grid(depth_tensor, max_height)
             
             # 2.3 [ANTI-MELTING] Suavização Bilateral GPU
             # O kernel C++ executa o Laplacian com Threshold Bilateral (Ignora as paredes 90 graus, suaviza apenas o chão/terreno organicamente)
@@ -88,6 +89,7 @@ def generate_landscape_mesh(
             vertices = vertices_tensor.cpu().numpy()
             faces = faces_tensor.cpu().numpy()
             normals = normals_tensor.cpu().numpy() # [H, W, 3] Image format
+            foliage_mask = foliage_tensor.cpu().numpy() # [H, W] Image format
             
             print(f"🌍 [WorldGenerator] Memória do terreno: {len(vertices)} vértices | {len(faces)} polígonos.")
             
@@ -125,6 +127,18 @@ def generate_landscape_mesh(
             cv2.imwrite(normal_path, cv2.cvtColor(normals_img, cv2.COLOR_RGB2BGR))
             img_normal = Image.open(normal_path).convert("RGB")
             
+            # V3: Salvar Foliage Mask (Ecosystem Map) gerado pela VRAM
+            foliage_path = os.path.join(base_dir, f"{base_name}_foliage_mask.png")
+            # Converter floats [0, 1] para uint8
+            foliage_img = (foliage_mask * 255).astype(np.uint8)
+            
+            # Clusters morfológicos para limpar "ruído" de pedregulhos isolados (OpenCV Open+Close)
+            # Isso garante que a floresta cresça em bosques, e não uma árvore solta na parede
+            kernel_morph = np.ones((5,5), np.uint8)
+            foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_OPEN, kernel_morph) 
+            foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_CLOSE, kernel_morph)
+            cv2.imwrite(foliage_path, foliage_img)
+            
             # Construir material PBR real (Principled BSDF)
             material = trimesh.visual.material.PBRMaterial(
                 baseColorTexture=img_color,
@@ -133,6 +147,7 @@ def generate_landscape_mesh(
                 metallicFactor=0.1
             )
             print(f"🎨 [WorldGenerator] Embedded PBR Normal Map: {normal_path}")
+            print(f"🌿 [WorldGenerator] Foliage Ecosystem Map gerado: {foliage_path}")
         else:
             material = trimesh.visual.material.SimpleMaterial(image=img_color)
             

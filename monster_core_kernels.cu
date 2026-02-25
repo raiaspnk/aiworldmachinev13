@@ -431,6 +431,33 @@ __global__ void generate_normal_map_kernel(
     }
 }
 
+__global__ void generate_foliage_mask_kernel(
+    const float* __restrict__ normals,
+    float* __restrict__ foliage_mask,
+    int res,
+    float slope_threshold)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int max_idx = res * res;
+    
+    if (idx < max_idx) {
+        // Read the Z component of the normal map color space projection [0, 1]
+        // Base flat normal is (0.5, 0.5, 1.0)
+        float nz_mapped = normals[idx * 3 + 2];
+        
+        // Recover original normal Z component [-1, 1]
+        float nz = (nz_mapped - 0.5f) * 2.0f;
+        
+        // If the surface points mostly upwards (flat terrain), it can spawn foliage
+        // slope_threshold determines how steep a slope can be (e.g. 0.9 means mostly flat)
+        if (nz >= slope_threshold) {
+            foliage_mask[idx] = 1.0f; // White = Can spawn
+        } else {
+            foliage_mask[idx] = 0.0f; // Black = No spawn (walls/steep hills)
+        }
+    }
+}
+
 std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
     torch::Tensor depth_map,
     float max_height)
@@ -475,8 +502,18 @@ std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
         res
     );
     
+    // 4. Generate Foliage Mask from Normals
+    auto foliage_mask = torch::zeros({res, res}, opts_float);
+    // Threshold 0.95f ensures only very flat surfaces spawn grass/trees
+    generate_foliage_mask_kernel<<<blocks_n, threads_v>>>(
+        normals.data_ptr<float>(),
+        foliage_mask.data_ptr<float>(),
+        res,
+        0.95f
+    );
+    
     // Sincroniza kernel para checar erros
     cudaDeviceSynchronize();
     
-    return {vertices, faces, normals};
+    return {vertices, faces, normals, foliage_mask};
 }
