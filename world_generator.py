@@ -9,11 +9,8 @@ def generate_landscape_mesh(
     depth_map_path: str,
     output_path: str,
     max_height: float = 0.5,
-    mesh_resolution: int = 1024,
-    smoothing_iterations: int = 3,
-    offset_x: float = 0.0,
-    offset_y: float = 0.0,
-    scale: float = 1.0
+    chunk_resolution: int = 1024,
+    smoothing_iterations: int = 3
 ) -> bool:
     """
     Gera uma malha 3D (.glb) de um cenário completo aplicando "Depth Displacement".
@@ -31,7 +28,7 @@ def generate_landscape_mesh(
         offset_y: Deslocamento no eixo Y para Seamless Tiling de chunks adjacentes.
         scale: Escala física do World space (1.0 = bloco de 1x1 unidade).
     """
-    print(f"🌍 [WorldGenerator] Iniciando extrusão de terreno ({mesh_resolution}x{mesh_resolution})...")
+    print(f"🌍 [WorldGenerator] Iniciando extrusão de terreno ({chunk_resolution}x{chunk_resolution})...")
     
     try:
         if not os.path.exists(depth_map_path):
@@ -49,125 +46,118 @@ def generate_landscape_mesh(
         kernel_sharpen = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
         img_depth_hpass = cv2.filter2D(img_depth, -1, kernel_sharpen)
         
-        # Redimensionar depth map para a nova alta resolução 1024x1024 (1M faces) usando Lanczos4 para preservar bordas finas
-        img_depth_resized = cv2.resize(img_depth_hpass, (mesh_resolution, mesh_resolution), interpolation=cv2.INTER_LANCZOS4)
+        # Extrair dimensões base da imagem RGB
+        orig_w, orig_h = img_color.size
+        # Validar tamanho da imagem vs chunk_resolution
+        chunks_x = max(1, orig_w // chunk_resolution)
+        chunks_y = max(1, orig_h // chunk_resolution)
         
-        # Normalização adaptativa (Suporta 8-bit ou 16-bit)
-        max_val = np.max(img_depth_resized)
-        if max_val == 0: max_val = 1.0 # Evitar divisão por zero
-        img_depth_normalized = img_depth_resized.astype(np.float32) / float(max_val)
+        # Redimensionar para ficar exato múltiplo do chunk
+        new_w = chunks_x * chunk_resolution
+        new_h = chunks_y * chunk_resolution
         
-        # Inverter o mapa se necessário (depende se o DepthAnything pretoo=longe ou branco=longe)
-        # Depth Anything V2: Branco = perto, Preto = longe.
-        # Nós queremos que o mais próximo suba no Z.
+        img_color = img_color.resize((new_w, new_h), Image.LANCZOS)
+        img_depth_hpass = cv2.resize(img_depth_hpass, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
         
-        # 2. Criar a Grade Plana e Extrudar (VRAM PTX CUDA)
-        print("🌍 [WorldGenerator] Instancionado Terreno Nível PTX/CUDA (MonsterCore)...")
+        print(f"🌍 [WorldGenerator] Auto-Tiling ativado: {chunks_x}x{chunks_y} Grid. (Processing {chunks_x * chunks_y} chunks of {chunk_resolution}px)")
+        
+        # Iniciar container da Scene (para mesclar N mundos em 1 único arquivo exportado)
+        scene = trimesh.Scene()
+        base_dir = os.path.dirname(output_path)
+        base_name = os.path.splitext(os.path.basename(output_path))[0]
+        
+        # Setup CUDA
         import torch
         import sys
-        
         try:
             from monster_core import generate_world_geometry_pipeline
             use_cuda = torch.cuda.is_available()
         except ImportError:
-            print("⚠️ [WorldGenerator] Aviso: monster_core V3 não encontrado. Fallback para Numpy.")
+            print("⚠️ [WorldGenerator] Aviso: monster_core V3 não encontrado. Fallback inviável para multi-tiling.")
             use_cuda = False
             
-        if use_cuda:
-            # 2.1 Enviar profundidade para VRAM
-            depth_tensor = torch.from_numpy(img_depth_normalized).cuda()
+        if not use_cuda:
+            print("❌ Erro: Gerar mundos massivos requer MonsterCore V3 CUDA ativo.")
+            return False
             
-            # 2.2 Gerar ecossistema, geometria e aplicar Anti-Melting direto em C++ puro (Zero Python Overhead)
-            # V3: NVidia Kernel unifica Displacement, Normals, Foliage e Bilateral Smooth em 1 call.
-            vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_world_geometry_pipeline(
-                depth_map=depth_tensor, 
-                max_height=max_height,
-                offset_x=offset_x,
-                offset_y=offset_y,
-                scale=scale,
-                smooth_iters=smoothing_iterations,
-                smooth_lambda=0.5
-            )
-            
-            # 2.3 Resgatar para RAM em C++ Pinned Memory
-            vertices = vertices_tensor.cpu().numpy()
-            faces = faces_tensor.cpu().numpy()
-            normals = normals_tensor.cpu().numpy() # [H, W, 3] Image format
-            foliage_mask = foliage_tensor.cpu().numpy() # [H, W] Image format
-            
-            print(f"🌍 [WorldGenerator] Memória do terreno: {len(vertices)} vértices | {len(faces)} polígonos.")
-            
-        else:
-            # Fallback (Antigo CPU)
-            x = np.linspace(-0.5, 0.5, mesh_resolution)
-            y = np.linspace(-0.5, 0.5, mesh_resolution)
-            xx, yy = np.meshgrid(x, y)
-            zz = img_depth_normalized * max_height
-            vertices = np.column_stack((xx.flatten(), yy.flatten(), zz.flatten()))
-            
-            idx = np.arange(mesh_resolution * mesh_resolution).reshape(mesh_resolution, mesh_resolution)
-            t1 = np.column_stack((idx[:-1, :-1].flatten(), idx[1:, :-1].flatten(), idx[:-1, 1:].flatten()))
-            t2 = np.column_stack((idx[1:, :-1].flatten(), idx[1:, 1:].flatten(), idx[:-1, 1:].flatten()))
-            faces = np.vstack((t1, t2))
-        
-        # Coordenadas UV (0 a 1) para mapear a textura (sempre na CPU pq trimesh não liga)
-        u = np.linspace(0, 1, mesh_resolution)
-        v = np.linspace(1, 0, mesh_resolution) # Invertido no Y para alinhar com imagem
-        uu, vv = np.meshgrid(u, v)
-        uvs = np.column_stack((uu.flatten(), vv.flatten()))
-        
-        # 3. Construir o objeto trimesh
-        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-        
-        # 3.1 PBR Materials (The Great Forging)
-        base_dir = os.path.dirname(output_path)
-        base_name = os.path.splitext(os.path.basename(output_path))[0]
-        
-        if use_cuda:
-            # Salvar Normal Map gerado pela VRAM
-            normal_path = os.path.join(base_dir, f"{base_name}_normal.png")
-            # Converter BGR para RGB (Padrão OpenGL) e 255
-            normals_img = (normals * 255).astype(np.uint8)
-            cv2.imwrite(normal_path, cv2.cvtColor(normals_img, cv2.COLOR_RGB2BGR))
-            img_normal = Image.open(normal_path).convert("RGB")
-            
-            # V3: Salvar Foliage Mask (Ecosystem Map) gerado pela VRAM
-            foliage_path = os.path.join(base_dir, f"{base_name}_foliage_mask.png")
-            # Converter floats [0, 1] para uint8
-            foliage_img = (foliage_mask * 255).astype(np.uint8)
-            
-            # Clusters morfológicos para limpar "ruído" de pedregulhos isolados (OpenCV Open+Close)
-            # Isso garante que a floresta cresça em bosques, e não uma árvore solta na parede
-            kernel_morph = np.ones((5,5), np.uint8)
-            foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_OPEN, kernel_morph) 
-            foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_CLOSE, kernel_morph)
-            cv2.imwrite(foliage_path, foliage_img)
-            
-            # Construir material PBR real (Principled BSDF)
-            material = trimesh.visual.material.PBRMaterial(
-                baseColorTexture=img_color,
-                normalTexture=img_normal,
-                roughnessFactor=0.8,
-                metallicFactor=0.1
-            )
-            print(f"🎨 [WorldGenerator] Embedded PBR Normal Map: {normal_path}")
-            print(f"🌿 [WorldGenerator] Foliage Ecosystem Map gerado: {foliage_path}")
-        else:
-            material = trimesh.visual.material.SimpleMaterial(image=img_color)
-            
-        # Configurar coordenas UV no visual
-        mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material)
-        
-        # 4. Suavização (GPU Laplacian via MonsterCore já ocorre internamente pelo pipeline se invocado depois)
-        # O trimesh.smoothing faria tudo derreter, portanto removemos as iterações aqui para preservar o threshold Bilateral do PTX.
-        # Caso precise, isso deve ser roteado pelo async_geometry_pipeline que acabamos de alterar.
-        if smoothing_iterations > 0 and not use_cuda:
-            print(f"🌍 [WorldGenerator] (Fallback) Suavizando terreno via CPU...")
-            trimesh.smoothing.filter_laplacian(mesh, iterations=smoothing_iterations)
-            
-        # 5. Exportar GLB
-        print(f"🌍 [WorldGenerator] Exportando para: {output_path}")
-        mesh.export(output_path)
+        # Loop de Tiling (Gerar Fatias)
+        for cy in range(chunks_y):
+            for cx in range(chunks_x):
+                print(f"   => Forging Chunk [{cx}, {cy}]...")
+                
+                # Coordenadas Crop
+                x0 = cx * chunk_resolution
+                y0 = cy * chunk_resolution
+                x1 = x0 + chunk_resolution
+                y1 = y0 + chunk_resolution
+                
+                # 1.1 Fatiar Textura e Profundidade
+                crop_color = img_color.crop((x0, y0, x1, y1))
+                crop_depth = img_depth_hpass[y0:y1, x0:x1]
+                
+                # Normalização adaptativa por chunk
+                max_val = np.max(crop_depth)
+                if max_val == 0: max_val = 1.0
+                depth_norm = crop_depth.astype(np.float32) / float(max_val)
+                depth_tensor = torch.from_numpy(depth_norm).cuda()
+                
+                # 2. Gerar Geometria V3 (Zero Overhead)
+                # Aplicamos offset_x e offset_y físicos para as fatias se conectarem 1:1 no espaço 3D
+                offset_x_world = float(cx) * 1.0
+                offset_y_world = float(chunks_y - 1 - cy) * 1.0 # Inverte eixo Y para bater c/ a imagem
+                
+                vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_world_geometry_pipeline(
+                    depth_map=depth_tensor, 
+                    max_height=max_height,
+                    offset_x=offset_x_world,
+                    offset_y=offset_y_world,
+                    scale=1.0,
+                    smooth_iters=smoothing_iterations,
+                    smooth_lambda=0.5
+                )
+                
+                vertices = vertices_tensor.cpu().numpy()
+                faces = faces_tensor.cpu().numpy()
+                normals = normals_tensor.cpu().numpy()
+                foliage_mask = foliage_tensor.cpu().numpy()
+                
+                # 3. Coordenadas UV e Malha parciais
+                u = np.linspace(0, 1, chunk_resolution)
+                v = np.linspace(1, 0, chunk_resolution)
+                uu, vv = np.meshgrid(u, v)
+                uvs = np.column_stack((uu.flatten(), vv.flatten()))
+                
+                mesh_chunk = trimesh.Trimesh(vertices=vertices, faces=faces)
+                
+                # Salvar Normal Map parciais associados ao chunk
+                normal_path = os.path.join(base_dir, f"{base_name}_normal_{cx}_{cy}.png")
+                normals_img = (normals * 255).astype(np.uint8)
+                cv2.imwrite(normal_path, cv2.cvtColor(normals_img, cv2.COLOR_RGB2BGR))
+                img_normal = Image.open(normal_path).convert("RGB")
+                
+                # Salvar Foliage Mask parciais associados ao chunk
+                foliage_path = os.path.join(base_dir, f"{base_name}_foliage_{cx}_{cy}.png")
+                foliage_img = (foliage_mask * 255).astype(np.uint8)
+                kernel_morph = np.ones((5,5), np.uint8)
+                foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_OPEN, kernel_morph) 
+                foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_CLOSE, kernel_morph)
+                cv2.imwrite(foliage_path, foliage_img)
+                
+                # Construir material PBR real (Principled BSDF) para o chunk
+                material = trimesh.visual.material.PBRMaterial(
+                    baseColorTexture=crop_color,
+                    normalTexture=img_normal,
+                    roughnessFactor=0.8,
+                    metallicFactor=0.1
+                )
+                
+                mesh_chunk.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material)
+                # Adicionar chunk a grande cena exportável
+                scene.add_geometry(mesh_chunk, geom_name=f"chunk_{cx}_{cy}")
+                
+        # 5. Exportar GLB massivo único
+        print(f"🌍 [WorldGenerator] Exportando mundo inteiro conectado (Scene) para: {output_path}")
+        scene.export(output_path)
         print("✅ [WorldGenerator] Terreno gerado com sucesso!")
         return True
         
@@ -184,12 +174,9 @@ if __name__ == "__main__":
     parser.add_argument("--image", required=True, help="Imagem RGB base (Texture)")
     parser.add_argument("--depth", required=True, help="Mapa de Profundidade")
     parser.add_argument("--output", required=True, help="Saída GLB")
-    parser.add_argument("--offset_x", type=float, default=0.0, help="World offset X para Tiling")
-    parser.add_argument("--offset_y", type=float, default=0.0, help="World offset Y para Tiling")
-    parser.add_argument("--scale", type=float, default=1.0, help="Tamanho físico do chunk")
+    parser.add_argument("--chunk_resolution", type=int, default=1024, help="Resolução de cada lote do grid de VRAM (Ex: 1024)")
     args = parser.parse_args()
     
     generate_landscape_mesh(
-        args.image, args.depth, args.output,
-        offset_x=args.offset_x, offset_y=args.offset_y, scale=args.scale
+        args.image, args.depth, args.output, chunk_resolution=args.chunk_resolution
     )
