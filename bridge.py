@@ -1651,7 +1651,7 @@ class WorldToMeshPipeline:
                         depth_map_path=depth_map_path,
                         output_path=str(glb_path),
                         max_height=0.5,
-                        mesh_resolution=512,
+                        chunk_resolution=1024,
                         smoothing_iterations=smoothing_iterations if use_mesh_smoothing else 0
                     )
                 except ImportError as e:
