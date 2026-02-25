@@ -348,6 +348,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           
     // Terrain Generation / Displacement mapping
     m.def("generate_displaced_grid", &generate_displaced_grid,
-          "Pure PTX Geometry Instancing for World Grid",
+          "Pure PTX Geometry Instancing for World Grid. Returns [vertices, faces, normal_map]",
           py::arg("depth_map"), py::arg("max_height") = 0.5f);
 }

@@ -34,16 +34,22 @@ def generate_landscape_mesh(
             
         # 1. Carregar a textura e o depth map
         img_color = Image.open(image_path).convert("RGB")
-        img_depth = cv2.imread(depth_map_path, cv2.IMREAD_GRAYSCALE)
+        
+        # [ANTI-STAIRCASE] Ler em 16-bits para evitar quantização e achatamento (Efeito Escada)
+        img_depth = cv2.imread(depth_map_path, cv2.IMREAD_ANYDEPTH)
         
         # [ANTI-MELTING] Aplicar filtro High-Pass (Sharpen) na profundidade
         # Isso acentua as quinas dos prédios e "cliva" transições suaves entre parede e chão
         kernel_sharpen = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
         img_depth_hpass = cv2.filter2D(img_depth, -1, kernel_sharpen)
         
-        # Redimensionar depth map para a nova alta resolução 1024x1024 (1M faces)
-        img_depth_resized = cv2.resize(img_depth_hpass, (mesh_resolution, mesh_resolution), interpolation=cv2.INTER_LINEAR)
-        img_depth_normalized = img_depth_resized.astype(np.float32) / 255.0
+        # Redimensionar depth map para a nova alta resolução 1024x1024 (1M faces) usando Lanczos4 para preservar bordas finas
+        img_depth_resized = cv2.resize(img_depth_hpass, (mesh_resolution, mesh_resolution), interpolation=cv2.INTER_LANCZOS4)
+        
+        # Normalização adaptativa (Suporta 8-bit ou 16-bit)
+        max_val = np.max(img_depth_resized)
+        if max_val == 0: max_val = 1.0 # Evitar divisão por zero
+        img_depth_normalized = img_depth_resized.astype(np.float32) / float(max_val)
         
         # Inverter o mapa se necessário (depende se o DepthAnything pretoo=longe ou branco=longe)
         # Depth Anything V2: Branco = perto, Preto = longe.
@@ -66,11 +72,23 @@ def generate_landscape_mesh(
             depth_tensor = torch.from_numpy(img_depth_normalized).cuda()
             
             # 2.2 Gerar matrizes de geometria na GPU via C++
-            vertices_tensor, faces_tensor = generate_displaced_grid(depth_tensor, max_height)
+            # V2: O NVidia Kernel agora calcula Vetores Normais em paralalelo
+            vertices_tensor, faces_tensor, normals_tensor = generate_displaced_grid(depth_tensor, max_height)
             
-            # 2.3 Resgatar para RAM em C++ Pinned Memory
+            # 2.3 [ANTI-MELTING] Suavização Bilateral GPU
+            # O kernel C++ executa o Laplacian com Threshold Bilateral (Ignora as paredes 90 graus, suaviza apenas o chão/terreno organicamente)
+            if smoothing_iterations > 0:
+                print(f"🌍 [WorldGenerator] Suavização Bilateral PTX ativa (Iterations: {smoothing_iterations})...")
+                # MonsterCore.laplacian_smooth_csr_kernel (Threshold hardcoded no .cu previne derretimento)
+                from monster_core import laplacian_smooth
+                # Suavizar apenas posições (vetores). Faces são re-passadas intactas.
+                vertices_tensor = laplacian_smooth(vertices_tensor, faces_tensor, iterations=smoothing_iterations, lambda_factor=0.5)
+            
+            # 2.4 Resgatar para RAM em C++ Pinned Memory
             vertices = vertices_tensor.cpu().numpy()
             faces = faces_tensor.cpu().numpy()
+            normals = normals_tensor.cpu().numpy() # [H, W, 3] Image format
+            
             print(f"🌍 [WorldGenerator] Memória do terreno: {len(vertices)} vértices | {len(faces)} polígonos.")
             
         else:
@@ -95,9 +113,31 @@ def generate_landscape_mesh(
         # 3. Construir o objeto trimesh
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
         
+        # 3.1 PBR Materials (The Great Forging)
+        base_dir = os.path.dirname(output_path)
+        base_name = os.path.splitext(os.path.basename(output_path))[0]
+        
+        if use_cuda:
+            # Salvar Normal Map gerado pela VRAM
+            normal_path = os.path.join(base_dir, f"{base_name}_normal.png")
+            # Converter BGR para RGB (Padrão OpenGL) e 255
+            normals_img = (normals * 255).astype(np.uint8)
+            cv2.imwrite(normal_path, cv2.cvtColor(normals_img, cv2.COLOR_RGB2BGR))
+            img_normal = Image.open(normal_path).convert("RGB")
+            
+            # Construir material PBR real (Principled BSDF)
+            material = trimesh.visual.material.PBRMaterial(
+                baseColorTexture=img_color,
+                normalTexture=img_normal,
+                roughnessFactor=0.8,
+                metallicFactor=0.1
+            )
+            print(f"🎨 [WorldGenerator] Embedded PBR Normal Map: {normal_path}")
+        else:
+            material = trimesh.visual.material.SimpleMaterial(image=img_color)
+            
         # Configurar coordenas UV no visual
-        material = trimesh.visual.material.SimpleMaterial(image=img_color)
-        mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, image=img_color, material=material)
+        mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material)
         
         # 4. Suavização (GPU Laplacian via MonsterCore já ocorre internamente pelo pipeline se invocado depois)
         # O trimesh.smoothing faria tudo derreter, portanto removemos as iterações aqui para preservar o threshold Bilateral do PTX.

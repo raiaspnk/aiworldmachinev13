@@ -375,6 +375,62 @@ __global__ void generate_grid_faces_kernel(
     }
 }
 
+__global__ void generate_normal_map_kernel(
+    const float* __restrict__ vertices,
+    float* __restrict__ normals,
+    int res)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int max_idx = res * res;
+    
+    if (idx < max_idx) {
+        int row = idx / res;
+        int col = idx % res;
+        
+        // Sobel-like gradient approximation matching central differences
+        int left   = max(0, col - 1);
+        int right  = min(res - 1, col + 1);
+        int top    = max(0, row - 1);
+        int bottom = min(res - 1, row + 1);
+        
+        int idx_left   = row * res + left;
+        int idx_right  = row * res + right;
+        int idx_top    = top * res + col;
+        int idx_bottom = bottom * res + col;
+        
+        // Read neighboring heights (Z coordinate)
+        float zl = vertices[idx_left * 3 + 2];
+        float zr = vertices[idx_right * 3 + 2];
+        float zt = vertices[idx_top * 3 + 2];
+        float zb = vertices[idx_bottom * 3 + 2];
+        
+        // Distance between samples (considering [-0.5, 0.5] space for vertices)
+        float dx = 1.0f / (float)(res - 1) * (right - left);
+        float dy = 1.0f / (float)(res - 1) * (bottom - top);
+        
+        if (dx == 0.0f) dx = 1e-6f;
+        if (dy == 0.0f) dy = 1e-6f;
+        
+        // Compute partial derivatives
+        float dzdx = (zr - zl) / dx;
+        float dzdy = (zb - zt) / dy;
+        
+        // Normal vector N = (-dzdx, -dzdy, 1.0)
+        float nx = -dzdx;
+        float ny = -dzdy;
+        float nz = 1.0f;
+        
+        // Normalize
+        float inv_len = rsqrtf(nx*nx + ny*ny + nz*nz);
+        
+        // Padrão OpenGL de Normal Map: R,G,B [0, 1] onde Z(B) aponta pro espectador
+        // Mapeando do vector space [-1, 1] para color space [0, 1]
+        normals[idx * 3 + 0] = (nx * inv_len) * 0.5f + 0.5f;
+        normals[idx * 3 + 1] = (ny * inv_len) * 0.5f + 0.5f;
+        normals[idx * 3 + 2] = (nz * inv_len) * 0.5f + 0.5f;
+    }
+}
+
 std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
     torch::Tensor depth_map,
     float max_height)
@@ -410,8 +466,17 @@ std::vector<torch::Tensor> launch_gpu_generate_displaced_grid(
         res
     );
     
+    // 3. Generate Normal Map texture via Sobel
+    auto normals = torch::empty({res, res, 3}, opts_float);
+    int blocks_n = (num_vertices + threads_v - 1) / threads_v;
+    generate_normal_map_kernel<<<blocks_n, threads_v>>>(
+        vertices.data_ptr<float>(),
+        normals.data_ptr<float>(),
+        res
+    );
+    
     // Sincroniza kernel para checar erros
     cudaDeviceSynchronize();
     
-    return {vertices, faces};
+    return {vertices, faces, normals};
 }
