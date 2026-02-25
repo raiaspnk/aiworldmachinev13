@@ -45,6 +45,14 @@ def generate_landscape_mesh(
         if depth_map_path.endswith('.npz'):
             depth_data = np.load(depth_map_path)
             img_depth = depth_data['depth']
+            
+            # INVERTER PROFUNDIDADE MÉTRICA: Elementos próximos (valores menores)
+            # devem se tornar as extrusões mais altas do terreno (valores maiores).
+            min_d, max_d = img_depth.min(), img_depth.max()
+            if max_d > min_d:
+                img_depth = (max_d - img_depth) / (max_d - min_d)
+            else:
+                img_depth = np.zeros_like(img_depth)
         else:
             img_depth = cv2.imread(depth_map_path, cv2.IMREAD_ANYDEPTH)
             
@@ -138,17 +146,20 @@ def generate_landscape_mesh(
                 offset_x_world = float(cx) * overlap_compensation * scale
                 offset_y_world = float(chunks_y - 1 - cy) * overlap_compensation * scale # Inverte eixo Y
                 
+                # Ajustar max_height pela escala para manter a proporção (se scale=100, altura máxima=50)
+                actual_max_height = max_height * scale
+                
                 # 2.A: Forjar Geometria do Chão Limpo (Terrain Mesh)
                 t_verts_pt, t_faces_pt, t_norms_pt, t_foliage_pt, _ = generate_world_geometry_pipeline(
                     depth_map=terrain_depth_tensor, 
-                    max_height=max_height, offset_x=offset_x_world, offset_y=offset_y_world,
+                    max_height=actual_max_height, offset_x=offset_x_world, offset_y=offset_y_world,
                     scale=scale, smooth_iters=smoothing_iterations, smooth_lambda=0.5
                 )
                 
                 # 2.B: Forjar Geometria da Cidade (Prédios e Muros Triplanares)
                 b_verts_pt, b_faces_pt, b_norms_pt, b_foliage_pt, b_mat_pt = generate_world_geometry_pipeline(
                     depth_map=depth_tensor, 
-                    max_height=max_height, offset_x=offset_x_world, offset_y=offset_y_world,
+                    max_height=actual_max_height, offset_x=offset_x_world, offset_y=offset_y_world,
                     scale=scale, smooth_iters=0, smooth_lambda=0.5 # Muros retos, não suavizar prédios
                 )
                 
