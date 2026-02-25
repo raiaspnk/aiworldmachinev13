@@ -354,6 +354,9 @@ __global__ void generate_displaced_vertices_kernel(
 
 __global__ void generate_grid_faces_kernel(
     int64_t* __restrict__ faces,
+    int32_t* __restrict__ material_ids,
+    const float* __restrict__ depth_map,
+    float max_height,
     int res)
 {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -376,6 +379,29 @@ __global__ void generate_grid_faces_kernel(
         faces[idx * 6 + 3] = v10;
         faces[idx * 6 + 4] = v11;
         faces[idx * 6 + 5] = v01;
+        
+        // --- Algorithmic Triplanar Wall Forging ---
+        // Calculate the height jump to automatically classify Walls vs Terrain
+        float z00 = depth_map[v00] * max_height;
+        float z10 = depth_map[v10] * max_height;
+        float z01 = depth_map[v01] * max_height;
+        float z11 = depth_map[v11] * max_height;
+        
+        float diff1_a = fabsf(z00 - z10);
+        float diff1_b = fabsf(z10 - z01);
+        float diff1_c = fabsf(z01 - z00);
+        float max_diff_1 = fmaxf(fmaxf(diff1_a, diff1_b), diff1_c);
+        
+        float diff2_a = fabsf(z10 - z11);
+        float diff2_b = fabsf(z11 - z01);
+        float diff2_c = fabsf(z01 - z10);
+        float max_diff_2 = fmaxf(fmaxf(diff2_a, diff2_b), diff2_c);
+        
+        // Wall threshold: 2% of total height represents a sudden cliff
+        float wall_threshold = max_height * 0.02f;
+        
+        material_ids[idx * 2 + 0] = (max_diff_1 > wall_threshold) ? 1 : 0;
+        material_ids[idx * 2 + 1] = (max_diff_2 > wall_threshold) ? 1 : 0;
     }
 }
 
@@ -482,6 +508,7 @@ std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
     
     auto vertices = torch::empty({res * res, 3}, opts_float);
     auto faces = torch::empty({(res - 1) * (res - 1) * 2, 3}, opts_long);
+    auto material_ids = torch::empty({(res - 1) * (res - 1) * 2}, depth_map.options().dtype(torch::kInt32));
     
     int num_vertices = res * res;
     int num_quads = (res - 1) * (res - 1);
@@ -500,11 +527,14 @@ std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
         scale
     );
     
-    // 2. Face Generation
+    // 2. Face Generation & Material ID Decoupling
     int threads_f = 256;
     int blocks_f = (num_quads + threads_f - 1) / threads_f;
     generate_grid_faces_kernel<<<blocks_f, threads_f>>>(
         faces.data_ptr<int64_t>(),
+        material_ids.data_ptr<int32_t>(),
+        depth_map.contiguous().data_ptr<float>(),
+        max_height,
         res
     );
     
@@ -533,5 +563,5 @@ std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
         vertices = launch_gpu_laplacian_smooth(vertices, faces, smooth_iters, smooth_lambda);
     }
     
-    return {vertices, faces, normals, foliage_mask};
+    return {vertices, faces, normals, foliage_mask, material_ids};
 }

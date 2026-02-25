@@ -349,7 +349,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           
     // V3: Zero-Overhead Terrain Generation / Displacement mapping / Foliage / PBR Normals
     m.def("generate_world_geometry_pipeline", &generate_world_geometry_pipeline,
-          "Zero-Overhead PTX Geometry Instancing for World Tiling. Returns [vertices, faces, normal_map, foliage_mask]",
+          "Zero-Overhead PTX Geometry Instancing for World Tiling. Returns [vertices, faces, normal_map, foliage_mask, material_ids]",
           py::arg("depth_map"), py::arg("max_height") = 0.5f,
           py::arg("offset_x") = 0.0f, py::arg("offset_y") = 0.0f, py::arg("scale") = 1.0f,
           py::arg("smooth_iters") = 3, py::arg("smooth_lambda") = 0.5f);
