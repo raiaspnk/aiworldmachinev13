@@ -1449,6 +1449,7 @@ class WorldToMeshPipeline:
         quality_threshold: float = 70.0,
         use_part_segmentation: bool = False,
         world_mode: bool = False,
+        scale: float = 100.0,
     ) -> dict:
         """
         Pipeline ONE-SHOT PERFECTION: prompt textual → .glb + .obj AAA
@@ -1652,7 +1653,8 @@ class WorldToMeshPipeline:
                         output_path=str(glb_path),
                         max_height=0.5,
                         chunk_resolution=1024,
-                        smoothing_iterations=smoothing_iterations if use_mesh_smoothing else 0
+                        smoothing_iterations=smoothing_iterations if use_mesh_smoothing else 0,
+                        scale=scale
                     )
                 except ImportError as e:
                     self.logger.error(f"   ❌ Erro crítico ao carregar gerador de mundos: {e}")
@@ -2166,6 +2168,10 @@ def main():
         "--tile-grid", type=int, default=2,
         help="Grid NxN para tiling (2=4tiles, 3=9tiles, 4=16tiles). Padrão: 2",
     )
+    parser.add_argument(
+        "--scale", type=float, default=100.0,
+        help="Escala real em pixels/metros do mundo gerado (padrão: 100.0)",
+    )
 
     # Processamento de Mesh ("Músculos AAA")
     parser.add_argument(
@@ -2300,6 +2306,7 @@ def main():
             tile_grid=args.tile_grid,
             use_part_segmentation=args.use_part_segmentation,
             world_mode=args.world_mode,
+            scale=args.scale,
         )
 
         if result["success"]:
