@@ -41,8 +41,19 @@ def generate_landscape_mesh(
         # 1. Carregar a textura e o depth map
         img_color = Image.open(image_path).convert("RGB")
         
-        # [ANTI-STAIRCASE] Ler em 16-bits para evitar quantização e achatamento (Efeito Escada)
-        img_depth = cv2.imread(depth_map_path, cv2.IMREAD_ANYDEPTH)
+        # [ANTI-STAIRCASE] Ler NPZ bruto métrico (float) ou Imagem 16-bits
+        if depth_map_path.endswith('.npz'):
+            depth_data = np.load(depth_map_path)
+            img_depth = depth_data['depth']
+        else:
+            img_depth = cv2.imread(depth_map_path, cv2.IMREAD_ANYDEPTH)
+            
+        if img_depth is None:
+            print(f"❌ [WorldGenerator] Erro: Falha ao ler mapa de profundidade: {depth_map_path}")
+            return False
+            
+        # Padronizar como float32 para o filtro matricial
+        img_depth = img_depth.astype(np.float32)
         
         # [ANTI-MELTING] Aplicar filtro High-Pass (Sharpen) na profundidade
         # Isso acentua as quinas dos prédios e "cliva" transições suaves entre parede e chão
