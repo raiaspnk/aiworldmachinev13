@@ -516,9 +516,14 @@ std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
     int threads_v = 256;
     int blocks_v = (num_vertices + threads_v - 1) / threads_v;
     
+    // GATOR-FIX: Salvaguardar Tensor Contíguo para não ser devorado pelo PyTorch Garbage Collector.
+    // Se .contiguous() for chamado diretamente no arg do kernel, a memória é liberada assim que
+    // o kernel é despachado (de forma assíncrona), gerando um DANGLING POINTER GIGANTESCO!
+    auto depth_map_contig = depth_map.contiguous();
+    
     // 1. Grid Displacement & World Placement
     generate_displaced_vertices_kernel<<<blocks_v, threads_v>>>(
-        depth_map.contiguous().data_ptr<float>(),
+        depth_map_contig.data_ptr<float>(),
         vertices.data_ptr<float>(),
         res,
         max_height,
@@ -533,7 +538,7 @@ std::vector<torch::Tensor> launch_gpu_generate_world_geometry(
     generate_grid_faces_kernel<<<blocks_f, threads_f>>>(
         faces.data_ptr<int64_t>(),
         material_ids.data_ptr<int32_t>(),
-        depth_map.contiguous().data_ptr<float>(),
+        depth_map_contig.data_ptr<float>(),
         max_height,
         res
     );
