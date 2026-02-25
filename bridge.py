@@ -329,40 +329,39 @@ class WorldToMeshPipeline:
         self.logger.info("   📏 [AUTO] Depth Anything 3 (metric depth)...")
 
         try:
-            from depth_anything_3.api import DepthAnything3
+            from transformers import pipeline
+            from PIL import Image
             import torch
             import cv2
             import numpy as np
 
             device = 'cuda' if torch.cuda.is_available() else 'cpu'
             
-            # Usar DA3Metric-Large para depth em escala métrica real
-            # Alternativa: DA3NESTED-GIANT-LARGE para multi-view + metric
-            model_name = "depth-anything/DA3METRIC-LARGE"
+            # Usar Depth Anything V2 oficial do HuggingFace
+            model_name = "depth-anything/Depth-Anything-V2-Large-hf"
             
             try:
-                # Carregar modelo via HuggingFace Hub
-                model = DepthAnything3.from_pretrained(model_name)
-                model = model.to(device=device).eval()
+                # Carregar modelo via HuggingFace Hub transformers
+                pipe = pipeline(task="depth-estimation", model=model_name, device=0 if device == 'cuda' else -1)
             except Exception as e:
-                self.logger.warning(f"   ⚠️ Falha ao carregar modelo: {e}")
+                self.logger.warning(f"   ⚠️ Falha ao carregar modelo transformer: {e}")
                 return None
 
             # Processar imagem
-            image = cv2.imread(image_path)
-            if image is None:
-                self.logger.warning(f"   ⚠️ Falha ao carregar: {image_path}")
-                return None
-
-            # DA3 aceita lista de imagens (mono ou multi-view)
-            # Para mono: lista com 1 imagem
-            with torch.no_grad():
-                prediction = model.inference([image])
-
-            # prediction.depth shape: [N, H, W] - METRIC depth (metros)
-            depth = prediction.depth[0]  # Pegar primeira (única) imagem
+            image = Image.open(image_path).convert('RGB')
             
-            # Salvar depth bruto (NPZ para preservar valores métricos)
+            # Predict
+            self.logger.info("   ⏳ Inference via Transformers Pipeline...")
+            prediction = pipe(image)
+            
+            # depth map em formato PIL, converter pra numpy (Métrico estimado)
+            depth_img = prediction["depth"]
+            depth = np.array(depth_img, dtype=np.float32)
+
+            # Inverter a profundidade e mapeá-la de volta (branco = perto)
+            depth = depth.max() - depth
+            
+            # Salvar depth bruto (NPZ para preservar valores)
             depth_npz_path = image_path.replace('.png', '_depth_metric.npz')
             np.savez_compressed(depth_npz_path, depth=depth)
 
@@ -379,7 +378,7 @@ class WorldToMeshPipeline:
             self.logger.info(f"   💾 Depth NPZ (métrico): {depth_npz_path}")
 
             # ── FIX: VRAM flush obrigatório após uso de GPU ──────
-            del model, image, prediction, depth, depth_normalized
+            del pipe, image, prediction, depth, depth_normalized
             import gc
             gc.collect()
             if torch.cuda.is_available():
