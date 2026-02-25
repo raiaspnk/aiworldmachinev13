@@ -10,7 +10,10 @@ def generate_landscape_mesh(
     output_path: str,
     max_height: float = 0.5,
     chunk_resolution: int = 1024,
-    smoothing_iterations: int = 3
+    smoothing_iterations: int = 3,
+    offset_x: float = 0.0,
+    offset_y: float = 0.0,
+    scale: float = 1.0
 ) -> bool:
     """
     Gera uma malha 3D (.glb) de um cenário completo aplicando "Depth Displacement".
@@ -48,18 +51,25 @@ def generate_landscape_mesh(
         
         # Extrair dimensões base da imagem RGB
         orig_w, orig_h = img_color.size
-        # Validar tamanho da imagem vs chunk_resolution
-        chunks_x = max(1, orig_w // chunk_resolution)
-        chunks_y = max(1, orig_h // chunk_resolution)
         
-        # Redimensionar para ficar exato múltiplo do chunk
-        new_w = chunks_x * chunk_resolution
-        new_h = chunks_y * chunk_resolution
+        # Para garantir que os tiles não tenham UMA fresta de divisão, precisamos que o último 
+        # vértice do Tile 0 seja IDÊNTICO na posição X,Y,Z ao primeiro vértice do Tile 1.
+        # Portanto, há um Overlap obrigatório de 1 pixel em toda as junções.
+        overlap = 1
+        eff_res = chunk_resolution - overlap
+        
+        # Validar tamanho da imagem vs chunk_resolution
+        chunks_x = max(1, orig_w // eff_res)
+        chunks_y = max(1, orig_h // eff_res)
+        
+        # Redimensionar para o novo tamanho costurado
+        new_w = chunks_x * eff_res + overlap
+        new_h = chunks_y * eff_res + overlap
         
         img_color = img_color.resize((new_w, new_h), Image.LANCZOS)
         img_depth_hpass = cv2.resize(img_depth_hpass, (new_w, new_h), interpolation=cv2.INTER_LANCZOS4)
         
-        print(f"🌍 [WorldGenerator] Auto-Tiling ativado: {chunks_x}x{chunks_y} Grid. (Processing {chunks_x * chunks_y} chunks of {chunk_resolution}px)")
+        print(f"🌍 [WorldGenerator] Seamless Auto-Tiling ativado: {chunks_x}x{chunks_y} Grid. (Processing {chunks_x * chunks_y} chunks of {chunk_resolution}px with 1px structural overlap)")
         
         # Iniciar container da Scene (para mesclar N mundos em 1 único arquivo exportado)
         scene = trimesh.Scene()
@@ -68,6 +78,7 @@ def generate_landscape_mesh(
         
         # Setup CUDA
         import torch
+        import torch.nn.functional as F
         import sys
         try:
             from monster_core import generate_world_geometry_pipeline
@@ -85,9 +96,9 @@ def generate_landscape_mesh(
             for cx in range(chunks_x):
                 print(f"   => Forging Chunk [{cx}, {cy}]...")
                 
-                # Coordenadas Crop
-                x0 = cx * chunk_resolution
-                y0 = cy * chunk_resolution
+                # Coordenadas Crop com Overlap Matemático (evita rasgar a malha no horizonte)
+                x0 = cx * eff_res
+                y0 = cy * eff_res
                 x1 = x0 + chunk_resolution
                 y1 = y0 + chunk_resolution
                 
@@ -101,59 +112,102 @@ def generate_landscape_mesh(
                 depth_norm = crop_depth.astype(np.float32) / float(max_val)
                 depth_tensor = torch.from_numpy(depth_norm).cuda()
                 
-                # 2. Gerar Geometria V3 (Zero Overhead)
-                # Aplicamos offset_x e offset_y físicos para as fatias se conectarem 1:1 no espaço 3D
-                offset_x_world = float(cx) * 1.0
-                offset_y_world = float(chunks_y - 1 - cy) * 1.0 # Inverte eixo Y para bater c/ a imagem
+                # --- [MONSTER CORE V4: Semantic Geometry Decoupling] ---
+                import torch.nn.functional as F
+                kernel_sz = 31
+                pad = kernel_sz // 2
+                depth_unsqueezed = depth_tensor.unsqueeze(0).unsqueeze(0)
+                eroded = -F.max_pool2d(-depth_unsqueezed, kernel_sz, stride=1, padding=pad)
+                terrain_depth_tensor = F.max_pool2d(eroded, kernel_sz, stride=1, padding=pad).squeeze()
                 
-                vertices_tensor, faces_tensor, normals_tensor, foliage_tensor = generate_world_geometry_pipeline(
-                    depth_map=depth_tensor, 
-                    max_height=max_height,
-                    offset_x=offset_x_world,
-                    offset_y=offset_y_world,
-                    scale=1.0,
-                    smooth_iters=smoothing_iterations,
-                    smooth_lambda=0.5
+                # Mascara Booleana: Prédios/Estruturas (Altura dif > 2% do chão)
+                building_mask_tensor = (depth_tensor - terrain_depth_tensor) > 0.02
+                
+                overlap_compensation = float(eff_res) / float(chunk_resolution - 1)
+                offset_x_world = float(cx) * overlap_compensation * scale
+                offset_y_world = float(chunks_y - 1 - cy) * overlap_compensation * scale # Inverte eixo Y
+                
+                # 2.A: Forjar Geometria do Chão Limpo (Terrain Mesh)
+                t_verts_pt, t_faces_pt, t_norms_pt, t_foliage_pt, _ = generate_world_geometry_pipeline(
+                    depth_map=terrain_depth_tensor, 
+                    max_height=max_height, offset_x=offset_x_world, offset_y=offset_y_world,
+                    scale=scale, smooth_iters=smoothing_iterations, smooth_lambda=0.5
                 )
                 
-                vertices = vertices_tensor.cpu().numpy()
-                faces = faces_tensor.cpu().numpy()
-                normals = normals_tensor.cpu().numpy()
-                foliage_mask = foliage_tensor.cpu().numpy()
+                # 2.B: Forjar Geometria da Cidade (Prédios e Muros Triplanares)
+                b_verts_pt, b_faces_pt, b_norms_pt, b_foliage_pt, b_mat_pt = generate_world_geometry_pipeline(
+                    depth_map=depth_tensor, 
+                    max_height=max_height, offset_x=offset_x_world, offset_y=offset_y_world,
+                    scale=scale, smooth_iters=0, smooth_lambda=0.5 # Muros retos, não suavizar prédios
+                )
                 
-                # 3. Coordenadas UV e Malha parciais
+                t_verts = t_verts_pt.cpu().numpy()
+                t_faces = t_faces_pt.cpu().numpy()
+                
+                b_verts = b_verts_pt.cpu().numpy()
+                b_faces = b_faces_pt.cpu().numpy()
+                b_mat = b_mat_pt.cpu().numpy()
+                bldg_mask = building_mask_tensor.cpu().numpy().flatten()
+                
+                # --- Filtro V4: Isolar Prédios e Muros ---
+                face_v0 = b_faces[:, 0]
+                face_v1 = b_faces[:, 1]
+                face_v2 = b_faces[:, 2]
+                
+                is_roof = bldg_mask[face_v0] | bldg_mask[face_v1] | bldg_mask[face_v2]
+                is_wall = (b_mat == 1)
+                
+                bldg_roof_faces = b_faces[is_roof & ~is_wall]
+                bldg_wall_faces = b_faces[is_wall]
+                
+                # 3. Coordenadas UV (Mesmo mapeamento Top-Down)
                 u = np.linspace(0, 1, chunk_resolution)
                 v = np.linspace(1, 0, chunk_resolution)
                 uu, vv = np.meshgrid(u, v)
                 uvs = np.column_stack((uu.flatten(), vv.flatten()))
                 
-                mesh_chunk = trimesh.Trimesh(vertices=vertices, faces=faces)
-                
-                # Salvar Normal Map parciais associados ao chunk
                 normal_path = os.path.join(base_dir, f"{base_name}_normal_{cx}_{cy}.png")
-                normals_img = (normals * 255).astype(np.uint8)
+                normals_img = (t_norms_pt.cpu().numpy() * 255).astype(np.uint8)
                 cv2.imwrite(normal_path, cv2.cvtColor(normals_img, cv2.COLOR_RGB2BGR))
                 img_normal = Image.open(normal_path).convert("RGB")
                 
-                # Salvar Foliage Mask parciais associados ao chunk
                 foliage_path = os.path.join(base_dir, f"{base_name}_foliage_{cx}_{cy}.png")
-                foliage_img = (foliage_mask * 255).astype(np.uint8)
+                foliage_img = (t_foliage_pt.cpu().numpy() * 255).astype(np.uint8)
                 kernel_morph = np.ones((5,5), np.uint8)
                 foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_OPEN, kernel_morph) 
                 foliage_img = cv2.morphologyEx(foliage_img, cv2.MORPH_CLOSE, kernel_morph)
                 cv2.imwrite(foliage_path, foliage_img)
                 
-                # Construir material PBR real (Principled BSDF) para o chunk
-                material = trimesh.visual.material.PBRMaterial(
+                # Material Base Top-Down
+                material_td = trimesh.visual.material.PBRMaterial(
                     baseColorTexture=crop_color,
                     normalTexture=img_normal,
                     roughnessFactor=0.8,
                     metallicFactor=0.1
                 )
                 
-                mesh_chunk.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material)
-                # Adicionar chunk a grande cena exportável
-                scene.add_geometry(mesh_chunk, geom_name=f"chunk_{cx}_{cy}")
+                # Material Triplanar (Para os Muros Cortados da Cidade)
+                material_wall = trimesh.visual.material.PBRMaterial(
+                    name=f"Triplanar_Wall",
+                    baseColorFactor=[100, 100, 100, 255],
+                    metallicFactor=0.2,
+                    roughnessFactor=0.5
+                )
+
+                # Construir Meshes
+                t_mesh = trimesh.Trimesh(vertices=t_verts, faces=t_faces, process=False)
+                t_mesh.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material_td)
+                scene.add_geometry(t_mesh, geom_name=f"Terrain_{cx}_{cy}")
+                
+                if len(bldg_roof_faces) > 0:
+                    b_roof = trimesh.Trimesh(vertices=b_verts, faces=bldg_roof_faces, process=False)
+                    b_roof.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material_td)
+                    scene.add_geometry(b_roof, geom_name=f"BldgRoof_{cx}_{cy}")
+                    
+                if len(bldg_wall_faces) > 0:
+                    b_wall = trimesh.Trimesh(vertices=b_verts, faces=bldg_wall_faces, process=False)
+                    b_wall.visual = trimesh.visual.TextureVisuals(uv=uvs, material=material_wall)
+                    scene.add_geometry(b_wall, geom_name=f"BldgWall_{cx}_{cy}")
                 
         # 5. Exportar GLB massivo único
         print(f"🌍 [WorldGenerator] Exportando mundo inteiro conectado (Scene) para: {output_path}")
